@@ -105,6 +105,98 @@ export interface TokenUsage {
   cache_read_input_tokens?: number;
 }
 
+// OpenAI/Qwen API Types
+
+export interface OpenAIMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface OpenAIRequest {
+  model: string;
+  messages: OpenAIMessage[];
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  n?: number;
+  stream?: boolean;
+  stop?: string | string[];
+  max_completion_tokens?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  logit_bias?: Record<string, number>;
+  user?: string;
+  tools?: OpenAITool[];
+  tool_choice?: 'none' | 'auto' | 'required' | { type: 'function'; function: { name: string } };
+  response_format?: { type: 'text' | 'json_object' };
+  seed?: number;
+  thinking?: { type: 'enabled'; budget_tokens: number }; // Qwen-specific thinking mode
+  extra_body?: Record<string, unknown>; // For other Qwen-specific fields
+}
+
+export interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export interface OpenAIChoice {
+  index: number;
+  message: OpenAIMessage;
+  finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'function_call';
+  logprobs: any; // Log probability information
+}
+
+export interface OpenAIUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface OpenAIResponse {
+  id: string;
+  object: 'chat.completion';
+  created: number;
+  model: string;
+  choices: OpenAIChoice[];
+  usage: OpenAIUsage;
+  system_fingerprint?: string;
+}
+
+export interface OpenAIStreamChoice {
+  index: number;
+  delta: {
+    role?: 'user' | 'assistant' | 'system';
+    content?: string;
+    tool_calls?: Array<{
+      index: number;
+      id: string;
+      function: {
+        name?: string;
+        arguments: string;
+      };
+      type: 'function';
+    }>;
+  };
+  finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'function_call' | null;
+}
+
+export interface OpenAIStreamResponse {
+  id: string;
+  object: 'chat.completion.chunk';
+  created: number;
+  model: string;
+  choices: OpenAIStreamChoice[];
+  system_fingerprint?: string;
+}
+
+// Union types for API requests and responses
+export type APIRequest = ClaudeRequest | OpenAIRequest;
+export type APIResponse = ClaudeResponse | OpenAIResponse;
+
 // SSE Event Types
 
 export type SSEEvent =
@@ -225,7 +317,7 @@ export interface WSRequestStart {
 export interface WSRequestBody {
   type: 'request_body';
   requestId: string;
-  body: ClaudeRequest;
+  body: APIRequest; // Can be ClaudeRequest or OpenAIRequest
 }
 
 export interface WSResponseStart {
@@ -246,7 +338,7 @@ export interface WSResponseComplete {
   type: 'response_complete';
   requestId: string;
   timestamp: number;
-  response: ClaudeResponse;
+  response: APIResponse; // Can be ClaudeResponse or OpenAIResponse
   durationMs: number;
 }
 
@@ -265,11 +357,11 @@ export interface Request {
   method: string;
   url: string;
   requestHeaders: Record<string, string>;
-  requestBody?: ClaudeRequest;
+  requestBody?: APIRequest; // Can be ClaudeRequest or OpenAIRequest
   statusCode?: number;
   responseHeaders?: Record<string, string>;
   sseEvents: SSEEvent[];
-  response?: ClaudeResponse;
+  response?: APIResponse; // Can be ClaudeResponse or OpenAIResponse
   durationMs?: number;
   error?: string;
   isStreaming: boolean;

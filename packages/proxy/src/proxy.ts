@@ -2,7 +2,7 @@ import * as mockttp from 'mockttp';
 import chalk from 'chalk';
 import { gunzipSync, brotliDecompressSync } from 'zlib';
 import type { CAConfig } from './ca.js';
-import { ClaudeInterceptor, CLAUDE_API_HOSTS } from './interceptor.js';
+import { ClaudeInterceptor, API_HOSTS } from './interceptor.js';
 import type { WiretapWebSocketServer } from './websocket.js';
 
 function decompressBody(buffer: Buffer, contentEncoding: string | undefined): string {
@@ -22,19 +22,12 @@ function decompressBody(buffer: Buffer, contentEncoding: string | undefined): st
   return buffer.toString('utf-8');
 }
 
-function isAnthropicHost(url: string): boolean {
-  try {
-    const host = new URL(url).host;
-    return CLAUDE_API_HOSTS.some((h) => host.includes(h));
-  } catch {
-    return false;
-  }
-}
 
 export interface ProxyOptions {
   port: number;
   ca: CAConfig;
   wsServer: WiretapWebSocketServer;
+  apiType?: 'claude' | 'qwen' | 'both';
 }
 
 export interface ProxyServer {
@@ -44,7 +37,7 @@ export interface ProxyServer {
 }
 
 export async function createProxy(options: ProxyOptions): Promise<ProxyServer> {
-  const { port, ca, wsServer } = options;
+  const { port, ca, wsServer, apiType = 'both' } = options;
 
   const server = mockttp.getLocal({
     https: {
@@ -55,16 +48,40 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyServer> {
 
   const interceptor = new ClaudeInterceptor(wsServer);
 
-  // Track request IDs for matching requests to responses (only for Anthropic requests)
+  // Track request IDs for matching requests to responses (only for API requests)
   const requestIds = new Map<string, string>();
 
-  // All requests pass through, but only Anthropic API requests are intercepted
+  // Determine which hosts to intercept based on API type
+  let hostsToIntercept: string[];
+  switch(apiType) {
+    case 'claude':
+      hostsToIntercept = ['api.anthropic.com', 'api.claude.ai'];
+      break;
+    case 'qwen':
+      hostsToIntercept = ['dashscope-intl.aliyuncs.com', 'dashscope.aliyuncs.com'];
+      break;
+    case 'both':
+    default:
+      hostsToIntercept = API_HOSTS;
+  }
+
+  // Function to check if request should be intercepted based on API type
+  function shouldIntercept(url: string): boolean {
+    try {
+      const host = new URL(url).host;
+      return hostsToIntercept.some((h) => host.includes(h));
+    } catch {
+      return false;
+    }
+  }
+
+  // All requests pass through, but only specified API requests are intercepted
   await server
     .forAnyRequest()
     .thenPassThrough({
       beforeRequest: async (request) => {
-        // Quick check - skip non-Anthropic hosts immediately
-        if (!isAnthropicHost(request.url)) {
+        // Quick check - skip non-API hosts immediately based on API type
+        if (!shouldIntercept(request.url)) {
           return {};
         }
 
@@ -75,7 +92,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyServer> {
         return {};
       },
       beforeResponse: async (response) => {
-        // Only process if we have a tracked request ID (i.e., it was an Anthropic request)
+        // Only process if we have a tracked request ID (i.e., it was an API request)
         const requestId = requestIds.get(response.id);
         if (!requestId) {
           return {};
@@ -109,7 +126,7 @@ export async function createProxy(options: ProxyOptions): Promise<ProxyServer> {
   await server.start(port);
 
   console.log(chalk.green('✓'), `Proxy server started on port ${chalk.cyan(port)}`);
-  console.log(chalk.gray('  Intercepting:'), CLAUDE_API_HOSTS.join(', '));
+  console.log(chalk.gray('  Intercepting:'), hostsToIntercept.join(', '));
   console.log(chalk.gray('  All other traffic: transparent passthrough'));
 
   return {

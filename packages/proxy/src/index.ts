@@ -12,8 +12,8 @@ const VERSION = "1.0.9";
 const BANNER = `
 ${chalk.cyan("╔════════════════════════════════════════════════════════════╗")}
 ${chalk.cyan("║")}                                                            ${chalk.cyan("║")}
-${chalk.cyan("║")}   ${chalk.bold.white("CC Wiretap")} ${chalk.gray("v" + VERSION)}                                        ${chalk.cyan("║")}
-${chalk.cyan("║")}   ${chalk.gray("HTTP/HTTPS proxy for Claude Code traffic inspection")}      ${chalk.cyan("║")}
+${chalk.cyan("║")}   ${chalk.bold.white("CQ Wiretap")} ${chalk.gray("v" + VERSION)}                                         ${chalk.cyan("║")}
+${chalk.cyan("║")}   ${chalk.gray("HTTP/HTTPS proxy for Claude/Qwen traffic inspection")}       ${chalk.cyan("║")}
 ${chalk.cyan("║")}                                                            ${chalk.cyan("║")}
 ${chalk.cyan("╚════════════════════════════════════════════════════════════╝")}
 `;
@@ -25,18 +25,27 @@ interface CLIOptions {
   quiet: boolean;
 }
 
+interface CLIOptions {
+  port: string;
+  wsPort: string;
+  uiPort: string;
+  quiet: boolean;
+  type: 'claude' | 'qwen' | 'both';
+}
+
 async function main() {
   const program = new Command();
 
   program
-    .name("cc-wiretap")
+    .name("cq-wiretap")
     .description(
-      "HTTP/HTTPS proxy for intercepting and visualizing Claude Code traffic",
+      "HTTP/HTTPS proxy for intercepting and visualizing Claude and Qwen traffic",
     )
     .version(VERSION)
     .option("-p, --port <port>", "Proxy server port", "8080")
     .option("-w, --ws-port <port>", "WebSocket server port for UI", "8081")
     .option("-u, --ui-port <port>", "UI dashboard server port", "3000")
+    .option("-t, --type <type>", "API type to intercept (claude, qwen, both)", "both")
     .option("-q, --quiet", "Suppress banner and verbose output", false)
     .action(async (options: CLIOptions) => {
       if (!options.quiet) {
@@ -63,6 +72,7 @@ async function main() {
           port: proxyPort,
           ca,
           wsServer,
+          apiType: options.type,
         });
 
         // Start setup server (for terminal eval command)
@@ -72,7 +82,7 @@ async function main() {
         const uiServer = createUIServer({ port: uiPort });
 
         console.log();
-        console.log(chalk.white("Ready to intercept Claude API traffic."));
+        console.log(chalk.white(`Ready to intercept ${options.type} API traffic.`));
         console.log();
 
         // Highlight the easy setup command
@@ -80,7 +90,7 @@ async function main() {
           chalk.yellow.bold("Quick setup - run this in any terminal:"),
         );
         console.log();
-        console.log(chalk.yellow("=>"), chalk.cyan.bold(getSetupCommand()));
+        console.log(chalk.yellow("=>"), chalk.cyan.bold(getSetupCommand(proxyPort)));
         console.log();
         console.log(chalk.gray("Or manually:"));
         console.log();
@@ -88,7 +98,7 @@ async function main() {
         console.log(
           chalk.gray(`   HTTPS_PROXY=http://localhost:${proxyPort} \\`),
         );
-        console.log(chalk.gray("   claude"));
+        console.log(chalk.gray("   claude"));  // Or your API call command
         console.log();
         const uiUrl = `http://localhost:${uiPort}`;
         console.log(
@@ -133,12 +143,12 @@ main().catch((error) => {
 export { loadOrGenerateCA, getCAPath } from "./ca.js";
 export { createProxy } from "./proxy.js";
 export { WiretapWebSocketServer } from "./websocket.js";
-export { ClaudeInterceptor, CLAUDE_API_HOSTS } from "./interceptor.js";
+export { ClaudeInterceptor, API_HOSTS } from "./interceptor.js";
 export {
   SSEStreamParser,
   parseSSEChunk,
   reconstructResponseFromEvents,
 } from "./parser.js";
-export { createSetupServer, getSetupCommand } from "./setup-server.js";
+export { createSetupServer, getSetupCommand, getSetupPort } from "./setup-server.js";
 export { createUIServer } from "./ui-server.js";
 export * from "./types.js";

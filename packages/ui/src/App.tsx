@@ -14,12 +14,21 @@ function RequestsPanel() {
     let inputTotal = 0;
     let outputTotal = 0;
     for (const request of requestsMap.values()) {
-      if (request.response?.type === 'message') {
-        const usage = request.response.usage;
-        inputTotal += (usage.input_tokens || 0) +
-                 (usage.cache_read_input_tokens || 0) +
-                 (usage.cache_creation_input_tokens || 0);
-        outputTotal += usage.output_tokens || 0;
+      if (request.response) {
+        // Check if it's a Claude response with usage property
+        if ('type' in request.response && request.response.type === 'message' && 'usage' in request.response) {
+          const usage = request.response.usage as any; // Claude usage
+          inputTotal += (usage.input_tokens || 0) +
+                   (usage.cache_read_input_tokens || 0) +
+                   (usage.cache_creation_input_tokens || 0);
+          outputTotal += usage.output_tokens || 0;
+        }
+        // Check if it's an OpenAI response with usage property
+        else if ('object' in request.response && request.response.object === 'chat.completion' && 'usage' in request.response) {
+          const usage = request.response.usage as any; // OpenAI usage
+          inputTotal += usage.prompt_tokens || 0;
+          outputTotal += usage.completion_tokens || 0;
+        }
       }
     }
     return { totalInputTokens: inputTotal, totalOutputTokens: outputTotal };

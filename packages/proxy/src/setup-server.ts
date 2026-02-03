@@ -2,13 +2,11 @@ import { createServer, type Server } from 'http';
 import { getCAPath } from './ca.js';
 import chalk from 'chalk';
 
-const SETUP_PORT = 8082;
-
-function generateSetupScript(proxyPort: number): string {
+function generateSetupScript(proxyPort: number, setupPort: number): string {
   const caPath = getCAPath();
 
   return `#!/bin/bash
-# CC Wiretap - Terminal Setup Script
+# CQ Wiretap - Terminal Setup Script
 # This script configures your terminal session to route traffic through the proxy
 
 # Proxy settings (for most HTTP clients)
@@ -47,9 +45,10 @@ export WIRETAP_ACTIVE="1"
 # export PS1="[wiretap] $PS1"
 
 echo ""
-echo "  ✓ CC Wiretap proxy configured for this terminal"
+echo "  ✓ CQ Wiretap proxy configured for this terminal"
 echo ""
 echo "  Proxy:  http://localhost:${proxyPort}"
+echo "  Setup:  http://localhost:${setupPort}/setup"
 echo "  CA:     ${caPath}"
 echo ""
 echo "  All HTTP/HTTPS traffic from this terminal will be intercepted."
@@ -68,10 +67,10 @@ export -f unset-wiretap 2>/dev/null || true
 `;
 }
 
-function generateFishScript(proxyPort: number): string {
+function generateFishScript(proxyPort: number, setupPort: number): string {
   const caPath = getCAPath();
 
-  return `# CC Wiretap - Fish Shell Setup Script
+  return `# CQ Wiretap - Fish Shell Setup Script
 
 set -gx HTTP_PROXY "http://localhost:${proxyPort}"
 set -gx HTTPS_PROXY "http://localhost:${proxyPort}"
@@ -88,9 +87,10 @@ set -gx no_proxy "localhost,127.0.0.1,::1"
 set -gx WIRETAP_ACTIVE "1"
 
 echo ""
-echo "  ✓ CC Wiretap proxy configured for this terminal"
+echo "  ✓ CQ Wiretap proxy configured for this terminal"
 echo ""
 echo "  Proxy:  http://localhost:${proxyPort}"
+echo "  Setup:  http://localhost:${setupPort}/setup"
 echo "  CA:     ${caPath}"
 echo ""
 
@@ -105,8 +105,11 @@ end
 }
 
 export function createSetupServer(proxyPort: number): Server {
+  // Calculate setup port based on proxy port (setup port is proxy port + 2)
+  const setupPort = proxyPort + 2;
+
   const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', `http://localhost:${SETUP_PORT}`);
+    const url = new URL(req.url || '/', `http://localhost:${setupPort}`);
 
     // CORS headers for browser access
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -119,15 +122,16 @@ export function createSetupServer(proxyPort: number): Server {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
 
       if (shell === 'fish') {
-        res.end(generateFishScript(proxyPort));
+        res.end(generateFishScript(proxyPort, setupPort));
       } else {
-        res.end(generateSetupScript(proxyPort));
+        res.end(generateSetupScript(proxyPort, setupPort));
       }
     } else if (url.pathname === '/status') {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
         active: true,
         proxyPort,
+        setupPort,
         caPath: getCAPath(),
       }));
     } else {
@@ -136,17 +140,18 @@ export function createSetupServer(proxyPort: number): Server {
     }
   });
 
-  server.listen(SETUP_PORT, () => {
-    console.log(chalk.green('✓'), `Setup server started on port ${chalk.cyan(SETUP_PORT)}`);
+  server.listen(setupPort, () => {
+    console.log(chalk.green('✓'), `Setup server started on port ${chalk.cyan(setupPort)}`);
   });
 
   return server;
 }
 
-export function getSetupCommand(): string {
-  return `eval "$(curl -s http://localhost:${SETUP_PORT}/setup)"`;
+export function getSetupCommand(proxyPort: number): string {
+  const setupPort = proxyPort + 2;
+  return `eval "$(curl -s http://localhost:${setupPort}/setup)"`;
 }
 
-export function getSetupPort(): number {
-  return SETUP_PORT;
+export function getSetupPort(proxyPort: number): number {
+  return proxyPort + 2;
 }

@@ -31,12 +31,32 @@ export function Header() {
   // Extract request info
   const model = selectedRequest?.requestBody?.model || '';
   const msgCount = selectedRequest?.requestBody?.messages?.length || 0;
-  const usage = selectedRequest?.response?.type === 'message' ? selectedRequest.response.usage : null;
-  const inputTokens = usage?.input_tokens || 0;
-  const outputTokens = usage?.output_tokens || 0;
-  const cacheReadTokens = usage?.cache_read_input_tokens || 0;
-  const cacheCreationTokens = usage?.cache_creation_input_tokens || 0;
-  const totalInputTokens = inputTokens + cacheReadTokens + cacheCreationTokens;
+  const usage = selectedRequest?.response && 'type' in selectedRequest.response && selectedRequest.response.type === 'message'
+    ? selectedRequest.response.usage
+    : selectedRequest?.response && 'object' in selectedRequest.response && selectedRequest.response.object === 'chat.completion'
+      ? selectedRequest.response.usage
+      : null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let totalInputTokens = 0;
+
+  if (usage) {
+    if ('input_tokens' in usage) {
+      // Claude usage
+      inputTokens = usage.input_tokens || 0;
+      outputTokens = usage.output_tokens || 0;
+      cacheReadTokens = usage.cache_read_input_tokens || 0;
+      cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+      totalInputTokens = inputTokens + cacheReadTokens + cacheCreationTokens;
+    } else if ('prompt_tokens' in usage) {
+      // OpenAI usage
+      inputTokens = usage.prompt_tokens || 0;
+      outputTokens = usage.completion_tokens || 0;
+      totalInputTokens = inputTokens;
+    }
+  }
 
   const handleReconnect = useCallback(() => {
     if (clickable) {

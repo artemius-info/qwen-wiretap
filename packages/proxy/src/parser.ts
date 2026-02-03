@@ -9,6 +9,7 @@ import type {
   ContentBlockDeltaEvent,
   MessageStartEvent,
   MessageDeltaEvent,
+  OpenAIResponse,
 } from './types.js';
 
 /**
@@ -122,7 +123,36 @@ export class SSEStreamParser {
  * Reconstructs a complete ClaudeMessageResponse from SSE events.
  * Streaming responses are always message responses (errors are non-streaming).
  */
-export function reconstructResponseFromEvents(events: SSEEvent[]): ClaudeMessageResponse | null {
+export function reconstructResponseFromEvents(events: SSEEvent[]): ClaudeMessageResponse | OpenAIResponse | null {
+  // First, check if this looks like Claude events
+  const hasClaudeEvents = events.some(event =>
+    event.type === 'message_start' ||
+    event.type === 'content_block_start' ||
+    event.type === 'content_block_delta' ||
+    event.type === 'message_delta'
+  );
+
+  if (hasClaudeEvents) {
+    return reconstructClaudeResponseFromEvents(events);
+  } else {
+    // Check if this looks like OpenAI events
+    const hasOpenAIEvents = events.some(event =>
+      event.type === 'error' ||
+      ('object' in event && typeof event === 'object' && event.object === 'chat.completion.chunk')
+    );
+
+    if (hasOpenAIEvents) {
+      return reconstructOpenAIResponseFromEvents(events);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Reconstructs a complete ClaudeMessageResponse from Claude SSE events.
+ */
+function reconstructClaudeResponseFromEvents(events: SSEEvent[]): ClaudeMessageResponse | null {
   let messageStart: MessageStartEvent | null = null;
   let messageDelta: MessageDeltaEvent | null = null;
   const contentBlocks: Map<number, { type: string; content: Partial<ClaudeContent> }> = new Map();
@@ -221,6 +251,17 @@ export function reconstructResponseFromEvents(events: SSEEvent[]): ClaudeMessage
     stop_sequence: messageDelta?.delta.stop_sequence || null,
     usage,
   };
+}
+
+/**
+ * Reconstructs a complete OpenAIResponse from OpenAI SSE events.
+ */
+function reconstructOpenAIResponseFromEvents(_events: SSEEvent[]): OpenAIResponse | null {
+  // This is a simplified reconstruction for OpenAI streaming responses
+  // In practice, you'd want to accumulate the streamed chunks into a full response
+  // For now, we'll return null since reconstructing OpenAI responses from streaming events
+  // requires more complex accumulation logic
+  return null;
 }
 
 /**

@@ -13,7 +13,8 @@ import type {
   ThinkingContent,
   ClaudeTool,
   SystemBlock,
-  ClaudeResponse,
+  OpenAIResponse,
+  APIResponse,
 } from '@/lib/types';
 import './SessionReportView.css';
 
@@ -428,59 +429,108 @@ function ResponseBlock({
   expandedBlocks,
   onToggleBlock,
 }: {
-  response: ClaudeResponse;
+  response: APIResponse;
   requestIndex: number;
   expanded: boolean;
   onToggle: () => void;
   expandedBlocks: Record<string, boolean>;
   onToggleBlock: (key: string) => void;
 }) {
-  const contentArray = response.type === 'message' ? response.content || [] : [];
-  const preview = useMemo(() => getContentPreview(contentArray), [contentArray]);
-
-  if (response.type === 'error') {
-    return (
-      <div className="report-message assistant expanded">
-        <div className="report-message-header">
-          <span className="report-message-role">ASSISTANT (ERROR)</span>
-        </div>
-        <div className="report-message-content">
-          <div className="report-error-block">
-            <div className="report-error-type">{response.error.type}</div>
-            <div className="report-error-message">{response.error.message}</div>
+  // Check if it's a Claude response
+  if ('type' in response) {
+    if (response.type === 'error') {
+      return (
+        <div className="report-message assistant expanded">
+          <div className="report-message-header">
+            <span className="report-message-role">ASSISTANT (ERROR)</span>
+          </div>
+          <div className="report-message-content">
+            <div className="report-error-block">
+              <div className="report-error-type">{response.error.type}</div>
+              <div className="report-error-message">{response.error.message}</div>
+            </div>
           </div>
         </div>
+      );
+    }
+
+    if (response.type === 'message') {
+      const contentArray = response.content || [];
+      const preview = useMemo(() => getContentPreview(contentArray), [contentArray]);
+
+      return (
+        <div className={`report-message assistant ${expanded ? 'expanded' : 'collapsed'}`}>
+          <div className="report-message-header" onClick={onToggle}>
+            <span className="report-message-role">
+              ASSISTANT
+              {response.stop_reason && (
+                <span className="report-stop-reason">[{response.stop_reason}]</span>
+              )}
+            </span>
+            {!expanded && preview && (
+              <span className="report-message-preview">{preview}</span>
+            )}
+          </div>
+          {expanded && (
+            <div className="report-message-content">
+              {contentArray.map((content, i) => (
+                <div key={i} className="report-content-block">
+                  <ContentBlockRenderer
+                    content={content}
+                    blockKey={`resp-${requestIndex}-${i}`}
+                    expandedBlocks={expandedBlocks}
+                    onToggleBlock={onToggleBlock}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // Handle OpenAI response
+  if ('object' in response && response.object === 'chat.completion') {
+    const openaiResponse = response as OpenAIResponse;
+    const content = openaiResponse.choices[0]?.message?.content || '';
+    const preview = content.substring(0, 100) + (content.length > 100 ? '...' : '');
+
+    return (
+      <div className={`report-message assistant ${expanded ? 'expanded' : 'collapsed'}`}>
+        <div className="report-message-header" onClick={onToggle}>
+          <span className="report-message-role">
+            ASSISTANT
+            {openaiResponse.choices[0]?.finish_reason && (
+              <span className="report-stop-reason">[{openaiResponse.choices[0].finish_reason}]</span>
+            )}
+          </span>
+          {!expanded && preview && (
+            <span className="report-message-preview">{preview}</span>
+          )}
+        </div>
+        {expanded && (
+          <div className="report-message-content">
+            <div className="report-text-block">
+              <pre>{content}</pre>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
+  // Fallback for other response types
   return (
-    <div className={`report-message assistant ${expanded ? 'expanded' : 'collapsed'}`}>
-      <div className="report-message-header" onClick={onToggle}>
-        <span className="report-message-role">
-          ASSISTANT
-          {response.stop_reason && (
-            <span className="report-stop-reason">[{response.stop_reason}]</span>
-          )}
-        </span>
-        {!expanded && preview && (
-          <span className="report-message-preview">{preview}</span>
-        )}
+    <div className="report-message assistant expanded">
+      <div className="report-message-header">
+        <span className="report-message-role">ASSISTANT</span>
       </div>
-      {expanded && (
-        <div className="report-message-content">
-          {contentArray.map((content, i) => (
-            <div key={i} className="report-content-block">
-              <ContentBlockRenderer
-                content={content}
-                blockKey={`resp-${requestIndex}-${i}`}
-                expandedBlocks={expandedBlocks}
-                onToggleBlock={onToggleBlock}
-              />
-            </div>
-          ))}
+      <div className="report-message-content">
+        <div className="report-text-block">
+          <JsonView data={response} style={jsonStyles} />
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -525,7 +575,7 @@ function SetupInstructions() {
             <span className="setup-logo-text">WIRETAP</span>
             <span className="setup-logo-bracket">]</span>
           </div>
-          <p className="setup-tagline">Intercept & visualize <span className="setup-highlight">Claude Code</span> traffic</p>
+          <p className="setup-tagline">Intercept & visualize <span className="setup-highlight">Claude/Qwen</span> traffic</p>
         </div>
 
         {/* Steps */}
@@ -565,8 +615,8 @@ function SetupInstructions() {
           >
             <div className="setup-step-number">02</div>
             <div className="setup-step-content">
-              <h3>Launch Claude</h3>
-              <p>Start Claude Code in the same terminal</p>
+              <h3>Launch Claude or Qwen</h3>
+              <p>Start Claude Code or make Qwen API calls in the same terminal</p>
               <div className="setup-command">
                 <div className="setup-command-prompt">$</div>
                 <code>claude</code>
@@ -623,18 +673,47 @@ function RequestReportCard({
   responseExpanded: boolean;
   onToggleResponse: () => void;
 }) {
-  const messages = request.requestBody?.messages || [];
+  // Determine if this is a Claude or OpenAI request
+  const isClaudeRequest = request.requestBody && 'messages' in request.requestBody &&
+                          Array.isArray((request.requestBody as any).messages) &&
+                          (request.requestBody as any).messages[0] &&
+                          (typeof (request.requestBody as any).messages[0].content === 'string' ||
+                           Array.isArray((request.requestBody as any).messages[0]?.content));
+
+  let messages: any[] = [];
+  let system: any = undefined;
+  let tools: any[] = [];
+
+  if (isClaudeRequest) {
+    // Claude request
+    const claudeReq = request.requestBody as any;
+    messages = claudeReq.messages || [];
+    system = claudeReq.system;
+    tools = claudeReq.tools || [];
+  } else if (request.requestBody && 'messages' in request.requestBody) {
+    // OpenAI request
+    const openaiReq = request.requestBody as any;
+    messages = openaiReq.messages || [];
+    // Convert OpenAI messages to Claude format for display
+    messages = messages.map((msg: any) => ({
+      role: msg.role,
+      content: msg.content || ''
+    }));
+    // OpenAI doesn't have system in messages, but in separate field sometimes
+    system = undefined;
+    tools = openaiReq.tools || [];
+  }
 
   return (
     <div className="report-request-card">
       <SystemPromptSection
-        system={request.requestBody?.system}
+        system={system}
         expanded={systemExpanded}
         onToggle={onToggleSystem}
       />
 
       <ToolsSection
-        tools={request.requestBody?.tools}
+        tools={tools}
         expanded={toolsExpanded}
         onToggle={onToggleTools}
         toolItemsExpanded={toolItemsExpanded}
@@ -754,8 +833,9 @@ export function SessionReportView() {
       });
     });
 
-    if (selectedRequest.response?.type === 'message') {
-      selectedRequest.response.content?.forEach((content, i) => {
+    if (selectedRequest.response && 'type' in selectedRequest.response && selectedRequest.response.type === 'message') {
+      const claudeResponse = selectedRequest.response as any;
+      claudeResponse.content?.forEach((content: any, i: number) => {
         if (
           content.type === 'thinking' ||
           content.type === 'tool_use' ||

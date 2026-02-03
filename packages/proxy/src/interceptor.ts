@@ -2,19 +2,25 @@ import type { CompletedRequest } from 'mockttp';
 import { randomUUID } from 'crypto';
 import chalk from 'chalk';
 import type {
-  ClaudeRequest,
   ClaudeResponse,
   InterceptedRequest,
+  APIRequest,
+  OpenAIResponse,
 } from './types.js';
 import { SSEStreamParser, reconstructResponseFromEvents } from './parser.js';
 import type { WiretapWebSocketServer } from './websocket.js';
 
-export const CLAUDE_API_HOSTS = [
+export const API_HOSTS = [
   'api.anthropic.com',
   'api.claude.ai',
+  'dashscope-intl.aliyuncs.com',
+  'dashscope.aliyuncs.com',
 ];
 
 const CLAUDE_MESSAGES_PATH = '/v1/messages';
+const QWEN_CHAT_COMPLETIONS_PATH = '/v1/chat/completions';
+const QWEN_ANTHROPIC_COMPATIBLE_PATH = '/apps/anthropic';
+const QWEN_ANTHROPIC_MESSAGES_PATH = '/apps/anthropic/v1/messages';
 
 export class ClaudeInterceptor {
   private wsServer: WiretapWebSocketServer;
@@ -31,10 +37,16 @@ export class ClaudeInterceptor {
     const host = request.headers.host || new URL(request.url).host;
     const path = new URL(request.url).pathname;
 
+    const isClaudeHost = API_HOSTS.slice(0, 2).some((h) => host.includes(h)); // anthropic.com, claude.ai
+    const isQwenHost = API_HOSTS.slice(2).some((h) => host.includes(h)); // dashscope domains
+
+    const isClaudePath = path.includes(CLAUDE_MESSAGES_PATH);
+    const isQwenChatPath = path.includes(QWEN_CHAT_COMPLETIONS_PATH);
+    const isQwenAnthropicPath = path.includes(QWEN_ANTHROPIC_COMPATIBLE_PATH) && path.includes('/v1/messages');
+
     return (
-      CLAUDE_API_HOSTS.some((h) => host.includes(h)) &&
-      path.includes(CLAUDE_MESSAGES_PATH) &&
-      request.method === 'POST'
+      (isClaudeHost && isClaudePath && request.method === 'POST') ||
+      (isQwenHost && (isQwenChatPath || isQwenAnthropicPath) && request.method === 'POST')
     );
   }
 
@@ -47,12 +59,12 @@ export class ClaudeInterceptor {
     const timestamp = Date.now();
 
     // Parse request body
-    let requestBody: ClaudeRequest | undefined;
+    let requestBody: APIRequest | undefined;
     try {
       const bodyBuffer = request.body.buffer;
       if (bodyBuffer.length > 0) {
         const bodyText = bodyBuffer.toString('utf-8');
-        requestBody = JSON.parse(bodyText) as ClaudeRequest;
+        requestBody = JSON.parse(bodyText) as APIRequest;
       }
     } catch (error) {
       console.error(chalk.yellow('⚠'), 'Failed to parse request body:', error);
@@ -96,16 +108,27 @@ export class ClaudeInterceptor {
 
       // Log request info
       const model = requestBody.model || 'unknown';
-      const messageCount = requestBody.messages?.length || 0;
-      const hasTools = requestBody.tools && requestBody.tools.length > 0;
-      const isStreaming = requestBody.stream === true;
+
+      // Determine if this is a Claude or OpenAI request to get message count
+      let messageCount = 0;
+      let hasTools = false;
+      let isStreaming = requestBody.stream === true;
+
+      if ('messages' in requestBody) {
+        messageCount = requestBody.messages?.length || 0;
+
+        // Check for tools based on request type
+        if ('tools' in requestBody && requestBody.tools) {
+          hasTools = Array.isArray(requestBody.tools) && requestBody.tools.length > 0;
+        }
+      }
 
       console.log(
         chalk.cyan('→'),
         chalk.white(`[${requestId.slice(0, 8)}]`),
         chalk.green(model),
         `${messageCount} messages`,
-        hasTools ? chalk.yellow(`+ ${requestBody.tools!.length} tools`) : '',
+        hasTools ? chalk.yellow(`+ ${Array.isArray(requestBody.tools) ? requestBody.tools.length : 0} tools`) : '',
         isStreaming ? chalk.magenta('streaming') : ''
       );
     }
@@ -195,15 +218,35 @@ export class ClaudeInterceptor {
         durationMs,
       });
 
-      // Log completion
+      // Log completion - handle both Claude and OpenAI responses
       console.log(); // New line after streaming dots
-      console.log(
-        chalk.green('✓'),
-        chalk.white(`[${requestId.slice(0, 8)}]`),
-        `${response.usage.input_tokens} in / ${response.usage.output_tokens} out`,
-        chalk.gray(`(${durationMs}ms)`),
-        response.stop_reason === 'tool_use' ? chalk.yellow('→ tool_use') : ''
-      );
+
+      if ('type' in response && response.type === 'message') {
+        // Claude response
+        console.log(
+          chalk.green('✓'),
+          chalk.white(`[${requestId.slice(0, 8)}]`),
+          `${response.usage.input_tokens} in / ${response.usage.output_tokens} out`,
+          chalk.gray(`(${durationMs}ms)`),
+          response.stop_reason === 'tool_use' ? chalk.yellow('→ tool_use') : ''
+        );
+      } else if ('object' in response && response.object === 'chat.completion') {
+        // OpenAI response
+        const usage = (response as OpenAIResponse).usage;
+        console.log(
+          chalk.green('✓'),
+          chalk.white(`[${requestId.slice(0, 8)}]`),
+          `${usage.prompt_tokens} in / ${usage.completion_tokens} out`,
+          chalk.gray(`(${durationMs}ms)`)
+        );
+      } else {
+        // Generic response
+        console.log(
+          chalk.green('✓'),
+          chalk.white(`[${requestId.slice(0, 8)}]`),
+          chalk.gray(`(${durationMs}ms)`)
+        );
+      }
     }
 
     // Cleanup
@@ -246,34 +289,65 @@ export class ClaudeInterceptor {
 
     try {
       if (bodyText) {
-        const claudeResponse = JSON.parse(bodyText) as ClaudeResponse;
+        // Try to parse as Claude response first, then OpenAI response
+        let parsedResponse: ClaudeResponse | OpenAIResponse;
+        try {
+          parsedResponse = JSON.parse(bodyText) as ClaudeResponse;
+        } catch {
+          try {
+            parsedResponse = JSON.parse(bodyText) as OpenAIResponse;
+          } catch {
+            console.error(chalk.yellow('⚠'), 'Failed to parse response as Claude or OpenAI format:', bodyText.substring(0, 200) + '...');
+            return;
+          }
+        }
+
         const timestamp = Date.now();
         const durationMs = timestamp - active.request.timestamp;
 
-        active.request.response = claudeResponse;
+        active.request.response = parsedResponse;
         active.request.durationMs = durationMs;
 
         this.wsServer.broadcast({
           type: 'response_complete',
           requestId,
           timestamp,
-          response: claudeResponse,
+          response: parsedResponse,
           durationMs,
         });
 
-        if (claudeResponse.type === 'message') {
+        // Handle logging differently based on response type
+        if ('type' in parsedResponse && parsedResponse.type === 'message') {
+          // Claude response
           console.log(
             chalk.green('✓'),
             chalk.white(`[${requestId.slice(0, 8)}]`),
-            `${claudeResponse.usage.input_tokens} in / ${claudeResponse.usage.output_tokens} out`,
+            `${parsedResponse.usage.input_tokens} in / ${parsedResponse.usage.output_tokens} out`,
             chalk.gray(`(${durationMs}ms)`),
-            claudeResponse.stop_reason === 'tool_use' ? chalk.yellow('→ tool_use') : ''
+            parsedResponse.stop_reason === 'tool_use' ? chalk.yellow('→ tool_use') : ''
           );
-        } else if (claudeResponse.type === 'error') {
+        } else if ('type' in parsedResponse && parsedResponse.type === 'error') {
+          // Claude error response
           console.log(
             chalk.yellow('⚠'),
             chalk.white(`[${requestId.slice(0, 8)}]`),
-            chalk.red(claudeResponse.error.message),
+            chalk.red(parsedResponse.error.message),
+            chalk.gray(`(${durationMs}ms)`)
+          );
+        } else if ('object' in parsedResponse && parsedResponse.object === 'chat.completion') {
+          // OpenAI response
+          const usage = (parsedResponse as OpenAIResponse).usage;
+          console.log(
+            chalk.green('✓'),
+            chalk.white(`[${requestId.slice(0, 8)}]`),
+            `${usage.prompt_tokens} in / ${usage.completion_tokens} out`,
+            chalk.gray(`(${durationMs}ms)`)
+          );
+        } else {
+          // Generic response
+          console.log(
+            chalk.green('✓'),
+            chalk.white(`[${requestId.slice(0, 8)}]`),
             chalk.gray(`(${durationMs}ms)`)
           );
         }

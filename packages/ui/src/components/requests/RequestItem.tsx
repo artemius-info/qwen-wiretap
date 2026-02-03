@@ -13,16 +13,29 @@ interface RequestItemProps {
 export function RequestItem({ request, isSelected, onClick }: RequestItemProps) {
   const model = request.requestBody?.model || 'unknown';
   const response = request.response;
-  const isMessageResponse = response?.type === 'message';
-  const hasError = !!request.error || response?.type === 'error';
+  const isClaudeMessageResponse = response && 'type' in response && response.type === 'message';
+  const isOpenAIResponse = response && 'object' in response && response.object === 'chat.completion';
+  const isClaudeErrorResponse = response && 'type' in response && response.type === 'error';
+  const hasError = !!request.error || isClaudeErrorResponse;
 
   // Calculate total input tokens including cache
-  const totalInputTokens = isMessageResponse
-    ? (response.usage.input_tokens || 0) +
-      (response.usage.cache_read_input_tokens || 0) +
-      (response.usage.cache_creation_input_tokens || 0)
-    : undefined;
-  const outputTokens = isMessageResponse ? response.usage.output_tokens : undefined;
+  let totalInputTokens: number | undefined;
+  let outputTokens: number | undefined;
+
+  if (isClaudeMessageResponse && response) {
+    const claudeResponse = response as any;
+    totalInputTokens = (claudeResponse.usage.input_tokens || 0) +
+      (claudeResponse.usage.cache_read_input_tokens || 0) +
+      (claudeResponse.usage.cache_creation_input_tokens || 0);
+    outputTokens = claudeResponse.usage.output_tokens;
+  } else if (isOpenAIResponse && response) {
+    const openaiResponse = response as any;
+    totalInputTokens = openaiResponse.usage.prompt_tokens;
+    outputTokens = openaiResponse.usage.completion_tokens;
+  } else {
+    totalInputTokens = undefined;
+    outputTokens = undefined;
+  }
 
   return (
     <button

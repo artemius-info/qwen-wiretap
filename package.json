@@ -1,8 +1,8 @@
 {
-  "name": "cc-wiretap",
+  "name": "cq-wiretap",
   "version": "1.0.9",
   "private": true,
-  "description": "HTTP/HTTPS proxy for intercepting and visualizing Claude Code traffic",
+  "description": "HTTP/HTTPS proxy for intercepting and visualizing Claude and Qwen API traffic",
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
@@ -10,7 +10,7 @@
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "turbo": "^2.0.0",
+    "turbo": "^2.8.1",
     "typescript": "^5.4.0"
   },
   "packageManager": "pnpm@9.0.4",
